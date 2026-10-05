@@ -1,0 +1,14 @@
+{
+	"luci-app-ddns-go": {
+		"description": "Grant access to DDNS-GO configuration",
+		"read": {
+			"uci": [ "ddns-go" ],
+			"ubus": {
+				"service": [ "list" ]
+			}
+		},
+		"write": {
+			"uci": [ "ddns-go" ]
+		}
+	}
+}
