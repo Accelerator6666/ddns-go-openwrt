@@ -1,0 +1,55 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: zh_Hans\n"
+
+msgid "DDNS-GO"
+msgstr "DDNS-GO"
+
+msgid "Service"
+msgstr "服务"
+
+msgid "Status"
+msgstr "运行状态"
+
+msgid "Running"
+msgstr "运行中"
+
+msgid "Stopped"
+msgstr "已停止"
+
+msgid "Enable"
+msgstr "启用"
+
+msgid "Listen address"
+msgstr "监听地址"
+
+msgid "Example: :9876 or 0.0.0.0:9876"
+msgstr "例如：:9876 或 0.0.0.0:9876"
+
+msgid "Update interval"
+msgstr "更新间隔"
+
+msgid "Seconds between DDNS checks."
+msgstr "DDNS 检查间隔，单位为秒。"
+
+msgid "IP cache times"
+msgstr "IP 缓存次数"
+
+msgid "Custom DNS server"
+msgstr "自定义 DNS 服务器"
+
+msgid "Skip TLS certificate verification"
+msgstr "跳过 TLS 证书验证"
+
+msgid "Disable DDNS-GO web interface"
+msgstr "禁用 DDNS-GO Web 管理界面"
+
+msgid "DDNS-GO web interface"
+msgstr "DDNS-GO Web 管理"
+
+msgid "Open web interface"
+msgstr "打开 Web 管理界面"
+
+msgid "Configure the DDNS-GO service. Provider credentials and domain records are configured in the DDNS-GO web interface."
+msgstr "配置 DDNS-GO 服务。DNS 服务商凭据和域名解析记录请在 DDNS-GO Web 管理界面中配置。"
