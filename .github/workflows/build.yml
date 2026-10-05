@@ -77,7 +77,12 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          ./scripts/feeds update packages luci
+
+          # OpenWrt SDK keeps core package sources in the base feed.
+          # LuCI build dependencies such as libubox, libubus, rpcd,
+          # ucode, lua and libnl-tiny must be made available first.
+          ./scripts/feeds update base packages luci
+          ./scripts/feeds install -a -p base
           ./scripts/feeds install -p luci luci-base
 
       - name: Add custom packages
