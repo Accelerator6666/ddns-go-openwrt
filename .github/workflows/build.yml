@@ -1,0 +1,160 @@
+name: Build OpenWrt x86_64 packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'ddns-go/**'
+      - 'luci-app-ddns-go/**'
+      - '.github/workflows/build.yml'
+      - 'README.md'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: IPK - OpenWrt 24.10.5
+            openwrt: '24.10.5'
+            sdk: openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_sha256: d3e8ea62fc1c12f93a9c808c2ef4c01b6e149ee240bcd5a74d15bebcbc385bdd
+            format: ipk
+
+          - name: APK - OpenWrt 25.12.5
+            openwrt: '25.12.5'
+            sdk: openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+            sdk_sha256: 0c8df0151a1e88feb7c03d694d61f6a18d51872815b7c811d76e2b77504d5e9c
+            format: apk
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gawk \
+            gettext \
+            git \
+            libncurses-dev \
+            libssl-dev \
+            python3 \
+            rsync \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            curl \
+            zstd
+
+      - name: Download and verify OpenWrt SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BASE_URL="https://downloads.openwrt.org/releases/${{ matrix.openwrt }}/targets/x86/64"
+          curl -fL --retry 5 --retry-delay 5 \
+            -o sdk.tar.zst \
+            "${BASE_URL}/${{ matrix.sdk }}"
+          echo "${{ matrix.sdk_sha256 }}  sdk.tar.zst" | sha256sum -c -
+          mkdir -p sdk
+          tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+
+      - name: Prepare feeds
+        working-directory: sdk
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ./scripts/feeds update packages luci
+          ./scripts/feeds install -p luci luci-base
+
+      - name: Add custom packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p sdk/package/custom
+          cp -a ddns-go sdk/package/custom/ddns-go
+          cp -a luci-app-ddns-go sdk/package/custom/luci-app-ddns-go
+
+      - name: Configure SDK
+        working-directory: sdk
+        run: make defconfig
+
+      - name: Build ddns-go
+        working-directory: sdk
+        run: |
+          make package/ddns-go/clean
+          make package/ddns-go/compile V=s -j"$(nproc)"
+
+      - name: Build luci-app-ddns-go
+        working-directory: sdk
+        run: |
+          make package/luci-app-ddns-go/clean
+          make package/luci-app-ddns-go/compile V=s -j"$(nproc)"
+
+      - name: Collect packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p output
+          if [ "${{ matrix.format }}" = "ipk" ]; then
+            find sdk/bin -type f \
+              \( -name 'ddns-go*.ipk' -o -name 'luci-app-ddns-go*.ipk' \) \
+              -exec cp -v {} output/ \;
+          else
+            find sdk/bin -type f \
+              \( -name 'ddns-go*.apk' -o -name 'luci-app-ddns-go*.apk' \) \
+              -exec cp -v {} output/ \;
+          fi
+          echo '===== OUTPUT ====='
+          ls -lh output
+          test "$(find output -maxdepth 1 -type f | wc -l)" -ge 2
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ matrix.format }}-${{ matrix.openwrt }}-x86_64
+          path: output/*
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum * | sort > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "DDNS-GO OpenWrt ${GITHUB_REF_NAME}" \
+            --generate-notes
