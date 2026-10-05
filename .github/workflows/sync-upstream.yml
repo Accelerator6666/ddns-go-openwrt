@@ -1,0 +1,169 @@
+name: Sync upstream DDNS-GO
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * *'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream-ddns-go
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Check upstream release
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Detect and update upstream release
+        id: sync
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          api='https://api.github.com/repos/jeessy2/ddns-go/releases/latest'
+          release_json="$(curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$api")"
+
+          upstream_tag="$(jq -r '.tag_name' <<<"$release_json")"
+          upstream_version="${upstream_tag#v}"
+
+          if [[ ! "$upstream_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "Invalid upstream version: $upstream_version" >&2
+            exit 1
+          fi
+
+          asset="ddns-go_${upstream_version}_linux_x86_64.tar.gz"
+          asset_url="$(jq -r --arg name "$asset" \
+            '.assets[] | select(.name == $name) | .browser_download_url' \
+            <<<"$release_json" | head -n1)"
+          checksums_url="$(jq -r \
+            '.assets[] | select(.name == "checksums.txt") | .browser_download_url' \
+            <<<"$release_json" | head -n1)"
+
+          if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+            echo "Upstream asset not found: $asset" >&2
+            exit 1
+          fi
+
+          if [[ -z "$checksums_url" || "$checksums_url" == "null" ]]; then
+            echo "Upstream checksums.txt not found" >&2
+            exit 1
+          fi
+
+          curl -fL --retry 5 --retry-delay 3 -o /tmp/ddns-go.tar.gz "$asset_url"
+          curl -fL --retry 5 --retry-delay 3 -o /tmp/checksums.txt "$checksums_url"
+
+          actual_hash="$(sha256sum /tmp/ddns-go.tar.gz | awk '{print $1}')"
+          expected_hash="$(awk -v file="$asset" '$2 == file {print $1}' /tmp/checksums.txt | head -n1)"
+
+          if [[ -z "$expected_hash" ]]; then
+            echo "Checksum for $asset not found in upstream checksums.txt" >&2
+            exit 1
+          fi
+
+          if [[ "$actual_hash" != "$expected_hash" ]]; then
+            echo "Checksum mismatch for $asset" >&2
+            echo "Expected: $expected_hash" >&2
+            echo "Actual:   $actual_hash" >&2
+            exit 1
+          fi
+
+          current_version="$(sed -n 's/^PKG_VERSION:=//p' ddns-go/Makefile | head -n1)"
+          release_tag="v${upstream_version}-1"
+
+          echo "Current package version:  $current_version"
+          echo "Latest upstream version:  $upstream_version"
+          echo "Verified SHA256:           $actual_hash"
+          echo "Packaging release tag:     $release_tag"
+
+          changed=false
+
+          if [[ "$current_version" != "$upstream_version" ]]; then
+            python3 - "$upstream_version" "$actual_hash" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          version, sha256 = sys.argv[1], sys.argv[2]
+
+          makefile = Path('ddns-go/Makefile')
+          text = makefile.read_text()
+          text, n1 = re.subn(r'^PKG_VERSION:=.*$', f'PKG_VERSION:={version}', text, count=1, flags=re.M)
+          text, n2 = re.subn(r'^PKG_RELEASE:=.*$', 'PKG_RELEASE:=1', text, count=1, flags=re.M)
+          text, n3 = re.subn(r'^PKG_HASH:=.*$', f'PKG_HASH:={sha256}', text, count=1, flags=re.M)
+          if (n1, n2, n3) != (1, 1, 1):
+              raise SystemExit(f'Unexpected Makefile replacement counts: {(n1, n2, n3)}')
+          makefile.write_text(text)
+
+          readme = Path('README.md')
+          rtext = readme.read_text()
+          rtext, n = re.subn(r'^- DDNS-GO: .*$', f'- DDNS-GO: {version}', rtext, count=1, flags=re.M)
+          if n != 1:
+              raise SystemExit('README DDNS-GO version line not found')
+          readme.write_text(rtext)
+          PY
+
+            git diff --check
+
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add ddns-go/Makefile README.md
+            git commit -m "chore: update DDNS-GO to ${upstream_version}"
+            git pull --rebase origin main
+            git push origin HEAD:main
+            changed=true
+          fi
+
+          git fetch --tags origin
+
+          if git rev-parse -q --verify "refs/tags/${release_tag}" >/dev/null; then
+            echo "Tag already exists: $release_tag"
+          else
+            git tag -a "$release_tag" -m "DDNS-GO ${upstream_version} for OpenWrt x86_64"
+            git push origin "$release_tag"
+            echo "Created tag: $release_tag"
+          fi
+
+          release_exists=false
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_exists=true
+            echo "Release already exists: $release_tag"
+          else
+            echo "Dispatching build.yml for $release_tag"
+            gh workflow run build.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref "$release_tag"
+          fi
+
+          {
+            echo "upstream_version=$upstream_version"
+            echo "release_tag=$release_tag"
+            echo "changed=$changed"
+            echo "release_exists=$release_exists"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo '## DDNS-GO upstream sync'
+            echo
+            echo "- Upstream: **${upstream_version}**"
+            echo "- SHA256: \`${actual_hash}\`"
+            echo "- Package changed: **${changed}**"
+            echo "- Release tag: **${release_tag}**"
+            echo "- Release already existed: **${release_exists}**"
+          } >> "$GITHUB_STEP_SUMMARY"
