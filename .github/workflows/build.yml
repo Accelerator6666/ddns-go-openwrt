@@ -90,7 +90,17 @@ jobs:
 
       - name: Configure SDK
         working-directory: sdk
-        run: make defconfig
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo 'CONFIG_PACKAGE_ddns-go=m' >> .config
+          echo 'CONFIG_PACKAGE_luci-app-ddns-go=m' >> .config
+
+          make defconfig
+
+          echo '===== SELECTED PACKAGES ====='
+          grep -E '^CONFIG_PACKAGE_(ddns-go|luci-app-ddns-go|luci-base|liblucihttp|liblucihttp-ucode|libucode|ucode|ucode-mod-html|rpcd-mod-luci|libnl-tiny)=' .config || true
 
       - name: Build ddns-go
         working-directory: sdk
@@ -100,9 +110,16 @@ jobs:
 
       - name: Build luci-app-ddns-go
         working-directory: sdk
+        shell: bash
         run: |
+          set -o pipefail
           make package/luci-app-ddns-go/clean
-          make package/luci-app-ddns-go/compile V=s -j"$(nproc)"
+
+          if ! make package/luci-app-ddns-go/compile V=s -j"$(nproc)"; then
+            echo "Parallel build failed, retrying with -j1..."
+            make package/luci-app-ddns-go/clean
+            make package/luci-app-ddns-go/compile V=s -j1
+          fi
 
       - name: Collect packages
         shell: bash
