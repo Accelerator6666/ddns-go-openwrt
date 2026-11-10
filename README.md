@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-- DDNS-GO: 6.17.7
+- DDNS-GO: 6.17.8
 - OpenWrt 24.10.5 x86/64: IPK
 - OpenWrt 25.12.5 x86/64: APK
 
